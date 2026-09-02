@@ -25,6 +25,7 @@ import type {
   GetAssistantMemoryParams,
   HealthStatus,
   MemoryEntry,
+  TelegramArchiveStatus,
   TelegramStatus
 } from './api.schemas';
 
@@ -198,6 +199,83 @@ export function useGetTelegramStatus<TData = Awaited<ReturnType<typeof getTelegr
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetTelegramStatusQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetTelegramArchiveStatusUrl = () => {
+
+
+
+
+  return `/api/assistant/archive-status`
+}
+
+/**
+ * @summary Get Telegram archive channel status
+ */
+export const getTelegramArchiveStatus = async ( options?: Parameters<typeof customFetch>[1]): Promise<TelegramArchiveStatus> => {
+
+  return customFetch<TelegramArchiveStatus>(getGetTelegramArchiveStatusUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetTelegramArchiveStatusQueryKey = () => {
+    return [
+    `/api/assistant/archive-status`
+    ] as const;
+    }
+
+
+export const getGetTelegramArchiveStatusQueryOptions = <TData = Awaited<ReturnType<typeof getTelegramArchiveStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramArchiveStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTelegramArchiveStatusQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTelegramArchiveStatus>>> = ({ signal }) => getTelegramArchiveStatus({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTelegramArchiveStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetTelegramArchiveStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getTelegramArchiveStatus>>>
+export type GetTelegramArchiveStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get Telegram archive channel status
+ */
+
+export function useGetTelegramArchiveStatus<TData = Awaited<ReturnType<typeof getTelegramArchiveStatus>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramArchiveStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetTelegramArchiveStatusQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

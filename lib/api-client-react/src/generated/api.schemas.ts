@@ -19,6 +19,15 @@ export interface TelegramStatus {
   lastError: string | null;
 }
 
+export interface TelegramArchiveStatus {
+  configured: boolean;
+  reachable: boolean;
+  /** @nullable */
+  title: string | null;
+  /** @nullable */
+  lastError: string | null;
+}
+
 export type MemoryKind = typeof MemoryKind[keyof typeof MemoryKind];
 
 

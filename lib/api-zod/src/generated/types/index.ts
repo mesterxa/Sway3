@@ -15,4 +15,5 @@ export * from './memoryData';
 export * from './memoryDataDirection';
 export * from './memoryEntry';
 export * from './memoryKind';
+export * from './telegramArchiveStatus';
 export * from './telegramStatus';

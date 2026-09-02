@@ -103,24 +103,29 @@ async function archiveMedia(
 ) {
   const archiveChatId = process.env.TELEGRAM_ARCHIVE_CHAT_ID;
   if (!archiveChatId) return null;
-  const method = kind === "photo" ? "/sendPhoto" : "/sendDocument";
-  const response = await connectors.proxy("telegram", method, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: archiveChatId,
-      [kind === "photo" ? "photo" : "document"]: fileId,
-      caption: caption.slice(0, 1024),
-    }),
-  });
-  const payload = (await response.json()) as {
-    ok: boolean;
-    result?: { photo?: Array<{ file_id: string }>; document?: { file_id: string } };
-  };
-  if (!payload.ok) return null;
-  return kind === "photo"
-    ? payload.result?.photo?.at(-1)?.file_id ?? fileId
-    : payload.result?.document?.file_id ?? fileId;
+  try {
+    const method = kind === "photo" ? "/sendPhoto" : "/sendDocument";
+    const response = await connectors.proxy("telegram", method, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: archiveChatId,
+        [kind === "photo" ? "photo" : "document"]: fileId,
+        caption: caption.slice(0, 1024),
+      }),
+    });
+    const payload = (await response.json()) as {
+      ok: boolean;
+      result?: { photo?: Array<{ file_id: string }>; document?: { file_id: string } };
+    };
+    if (!payload.ok) return null;
+    return kind === "photo"
+      ? payload.result?.photo?.at(-1)?.file_id ?? fileId
+      : payload.result?.document?.file_id ?? fileId;
+  } catch (error) {
+    logger.warn({ err: error }, "Could not archive Telegram media");
+    return null;
+  }
 }
 
 async function processUpdate(update: TelegramUpdate) {
@@ -255,4 +260,44 @@ export function getTelegramStatus() {
     lastUpdateAt,
     lastError,
   };
+}
+
+export async function getTelegramArchiveStatus() {
+  const archiveChatId = process.env.TELEGRAM_ARCHIVE_CHAT_ID;
+  if (!archiveChatId) {
+    return {
+      configured: false,
+      reachable: false,
+      title: null,
+      lastError: "TELEGRAM_ARCHIVE_CHAT_ID is not configured",
+    };
+  }
+
+  try {
+    const response = await connectors.proxy(
+      "telegram",
+      `/getChat?chat_id=${encodeURIComponent(archiveChatId)}`,
+      { method: "GET" },
+    );
+    const payload = (await response.json()) as {
+      ok: boolean;
+      result?: { title?: string; username?: string };
+      description?: string;
+    };
+    return {
+      configured: true,
+      reachable: payload.ok,
+      title: payload.ok
+        ? payload.result?.title ?? payload.result?.username ?? "Telegram archive"
+        : null,
+      lastError: payload.ok ? null : payload.description ?? "Telegram rejected the archive channel",
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      reachable: false,
+      title: null,
+      lastError: error instanceof Error ? error.message : "Telegram archive check failed",
+    };
+  }
 }

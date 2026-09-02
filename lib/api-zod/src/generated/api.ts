@@ -29,6 +29,17 @@ export const GetTelegramStatusResponse = zod.object({
 
 
 /**
+ * @summary Get Telegram archive channel status
+ */
+export const GetTelegramArchiveStatusResponse = zod.object({
+  "configured": zod.boolean(),
+  "reachable": zod.boolean(),
+  "title": zod.string().nullable(),
+  "lastError": zod.string().nullable()
+})
+
+
+/**
  * @summary Get assistant memory
  */
 export const getAssistantMemoryQueryLimitDefault = 100;

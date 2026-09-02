@@ -1,11 +1,15 @@
 import { Router, type IRouter } from "express";
 import { addMemory, getMemorySummary } from "../lib/assistant-memory";
-import { getTelegramStatus } from "../telegram";
+import { getTelegramArchiveStatus, getTelegramStatus } from "../telegram";
 
 const router: IRouter = Router();
 
 router.get("/assistant/telegram-status", (_req, res) => {
   res.json(getTelegramStatus());
+});
+
+router.get("/assistant/archive-status", async (_req, res) => {
+  res.json(await getTelegramArchiveStatus());
 });
 
 router.get("/assistant/memory", async (req, res) => {
