@@ -12,6 +12,7 @@ export type MemoryKind = typeof MemoryKind[keyof typeof MemoryKind];
 export const MemoryKind = {
   message: 'message',
   photo: 'photo',
+  file: 'file',
   reminder: 'reminder',
   debt: 'debt',
   note: 'note',

@@ -54,7 +54,7 @@ export const GetAssistantMemoryResponse = zod.object({
   "entries": zod.array(zod.object({
   "id": zod.string(),
   "chatId": zod.string(),
-  "kind": zod.enum(['message', 'photo', 'reminder', 'debt', 'note']),
+  "kind": zod.enum(['message', 'photo', 'file', 'reminder', 'debt', 'note']),
   "text": zod.string(),
   "createdAt": zod.coerce.date(),
   "data": zod.object({
@@ -64,7 +64,10 @@ export const GetAssistantMemoryResponse = zod.object({
   "date": zod.string().optional(),
   "fileId": zod.string().optional(),
   "caption": zod.string().optional(),
-  "person": zod.string().optional()
+  "person": zod.string().optional(),
+  "archiveFileId": zod.string().optional(),
+  "fileName": zod.string().optional(),
+  "mimeType": zod.string().optional()
 }).optional()
 })),
   "counts": zod.object({
@@ -89,7 +92,7 @@ export const SendAssistantCommandBody = zod.object({
 export const SendAssistantCommandResponse = zod.object({
   "id": zod.string(),
   "chatId": zod.string(),
-  "kind": zod.enum(['message', 'photo', 'reminder', 'debt', 'note']),
+  "kind": zod.enum(['message', 'photo', 'file', 'reminder', 'debt', 'note']),
   "text": zod.string(),
   "createdAt": zod.coerce.date(),
   "data": zod.object({
@@ -99,7 +102,10 @@ export const SendAssistantCommandResponse = zod.object({
   "date": zod.string().optional(),
   "fileId": zod.string().optional(),
   "caption": zod.string().optional(),
-  "person": zod.string().optional()
+  "person": zod.string().optional(),
+  "archiveFileId": zod.string().optional(),
+  "fileName": zod.string().optional(),
+  "mimeType": zod.string().optional()
 }).optional()
 })
 

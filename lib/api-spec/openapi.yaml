@@ -107,7 +107,7 @@ components:
         - lastError
     MemoryKind:
       type: string
-      enum: [message, photo, reminder, debt, note]
+      enum: [message, photo, file, reminder, debt, note]
     MemoryData:
       type: object
       properties:
@@ -125,6 +125,12 @@ components:
         caption:
           type: string
         person:
+          type: string
+        archiveFileId:
+          type: string
+        fileName:
+          type: string
+        mimeType:
           type: string
     MemoryEntry:
       type: object

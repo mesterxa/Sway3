@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type MemoryKind = "message" | "photo" | "reminder" | "debt" | "note";
+export type MemoryKind = "message" | "photo" | "file" | "reminder" | "debt" | "note";
 
 export type MemoryEntry = {
   id: string;
@@ -17,6 +17,9 @@ export type MemoryEntry = {
     fileId?: string;
     caption?: string;
     person?: string;
+    archiveFileId?: string;
+    fileName?: string;
+    mimeType?: string;
   };
 };
 

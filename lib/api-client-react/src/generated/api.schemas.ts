@@ -25,6 +25,7 @@ export type MemoryKind = typeof MemoryKind[keyof typeof MemoryKind];
 export const MemoryKind = {
   message: 'message',
   photo: 'photo',
+  file: 'file',
   reminder: 'reminder',
   debt: 'debt',
   note: 'note',
@@ -46,6 +47,9 @@ export interface MemoryData {
   fileId?: string;
   caption?: string;
   person?: string;
+  archiveFileId?: string;
+  fileName?: string;
+  mimeType?: string;
 }
 
 export interface MemoryEntry {

@@ -178,7 +178,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
               settled: false,
             }));
           const remoteNotes = entries
-            .filter((entry) => (entry.kind === 'note' || entry.kind === 'photo' || entry.kind === 'message') && !knownIds.has(entry.id))
+            .filter((entry) => (entry.kind === 'note' || entry.kind === 'photo' || entry.kind === 'file' || entry.kind === 'message') && !knownIds.has(entry.id))
             .map((entry) => ({ id: entry.id, text: entry.text, createdAt: entry.createdAt }));
           if (!remoteReminders.length && !remoteDebts.length && !remoteNotes.length) return current;
           return {

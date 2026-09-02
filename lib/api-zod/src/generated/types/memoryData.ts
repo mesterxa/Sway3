@@ -15,4 +15,7 @@ export interface MemoryData {
   fileId?: string;
   caption?: string;
   person?: string;
+  archiveFileId?: string;
+  fileName?: string;
+  mimeType?: string;
 }
