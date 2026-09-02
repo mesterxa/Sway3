@@ -60,6 +60,7 @@ type AssistantContextValue = Store & {
   toggleWatch: (id: string) => void;
   addNote: (text: string) => void;
   deleteNote: (id: string) => void;
+  hydrateFromServer: (entries: Array<{ id: string; kind: string; text: string; createdAt: string; data?: { amount?: number; direction?: 'owedToMe' | 'iOwe'; title?: string; date?: string; person?: string } }>) => void;
 };
 
 const STORAGE_KEY = 'watch-sales-assistant-store';
@@ -152,6 +153,41 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           ...current,
           notes: current.notes.filter((item) => item.id !== id),
         })),
+      hydrateFromServer: (entries) =>
+        setStore((current) => {
+          const knownIds = new Set([
+            ...current.reminders.map((item) => item.id),
+            ...current.debts.map((item) => item.id),
+            ...current.notes.map((item) => item.id),
+          ]);
+          const remoteReminders = entries
+            .filter((entry) => entry.kind === 'reminder' && !knownIds.has(entry.id))
+            .map((entry) => ({
+              id: entry.id,
+              title: entry.data?.title ?? entry.text,
+              date: entry.data?.date ?? entry.createdAt,
+              completed: false,
+            }));
+          const remoteDebts = entries
+            .filter((entry) => entry.kind === 'debt' && !knownIds.has(entry.id) && entry.data?.amount)
+            .map((entry) => ({
+              id: entry.id,
+              person: entry.data?.person ?? entry.text,
+              amount: entry.data?.amount ?? 0,
+              direction: entry.data?.direction ?? 'owedToMe',
+              settled: false,
+            }));
+          const remoteNotes = entries
+            .filter((entry) => (entry.kind === 'note' || entry.kind === 'photo' || entry.kind === 'message') && !knownIds.has(entry.id))
+            .map((entry) => ({ id: entry.id, text: entry.text, createdAt: entry.createdAt }));
+          if (!remoteReminders.length && !remoteDebts.length && !remoteNotes.length) return current;
+          return {
+            ...current,
+            reminders: [...remoteReminders, ...current.reminders],
+            debts: [...remoteDebts, ...current.debts],
+            notes: [...remoteNotes, ...current.notes],
+          };
+        }),
     }),
     [hydrated, store],
   );

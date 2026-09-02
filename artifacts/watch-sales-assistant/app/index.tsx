@@ -1,6 +1,6 @@
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Keyboard,
@@ -18,6 +18,7 @@ import { useColors } from '@/hooks/useColors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Debt, Reminder, useAssistant } from '@/context/AssistantContext';
+import { getGetAssistantMemoryQueryKey, useGetAssistantMemory } from '@workspace/api-client-react';
 
 type Tab = 'home' | 'reminders' | 'debts' | 'customers' | 'inventory';
 type ModalType = 'reminder' | 'debt' | 'note' | 'customer' | 'watch' | null;
@@ -62,7 +63,16 @@ function AppContent() {
     toggleWatch,
     addNote,
     deleteNote,
+    hydrateFromServer,
   } = useAssistant();
+  const { data: remoteMemory } = useGetAssistantMemory(
+    { limit: 500 },
+    { query: { staleTime: 10000, queryKey: getGetAssistantMemoryQueryKey({ limit: 500 }) } },
+  );
+
+  useEffect(() => {
+    if (remoteMemory?.entries) hydrateFromServer(remoteMemory.entries);
+  }, [hydrateFromServer, remoteMemory]);
 
   const totalOwedToMe = debts
     .filter((item) => item.direction === 'owedToMe' && !item.settled)

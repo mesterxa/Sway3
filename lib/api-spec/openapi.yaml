@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: assistant
+    description: Telegram assistant memory operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /assistant/telegram-status:
+    get:
+      operationId: getTelegramStatus
+      tags: [assistant]
+      summary: Get Telegram connection status
+      responses:
+        "200":
+          description: Telegram connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramStatus"
+  /assistant/memory:
+    get:
+      operationId: getAssistantMemory
+      tags: [assistant]
+      summary: Get assistant memory
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Recent assistant memory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssistantMemorySummary"
+  /assistant/command:
+    post:
+      operationId: sendAssistantCommand
+      tags: [assistant]
+      summary: Save a command from the website
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandRequest"
+      responses:
+        "201":
+          description: Saved memory entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryEntry"
+        "400":
+          description: Invalid command
 components:
   schemas:
     HealthStatus:
@@ -33,4 +88,90 @@ components:
           type: string
       required:
         - status
+    TelegramStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        botUsername:
+          type: [string, "null"]
+        lastUpdateAt:
+          type: [string, "null"]
+          format: date-time
+        lastError:
+          type: [string, "null"]
+      required:
+        - connected
+        - botUsername
+        - lastUpdateAt
+        - lastError
+    MemoryKind:
+      type: string
+      enum: [message, photo, reminder, debt, note]
+    MemoryData:
+      type: object
+      properties:
+        amount:
+          type: number
+        direction:
+          type: string
+          enum: [owedToMe, iOwe]
+        title:
+          type: string
+        date:
+          type: string
+        fileId:
+          type: string
+        caption:
+          type: string
+        person:
+          type: string
+    MemoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        chatId:
+          type: string
+        kind:
+          $ref: "#/components/schemas/MemoryKind"
+        text:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        data:
+          $ref: "#/components/schemas/MemoryData"
+      required: [id, chatId, kind, text, createdAt]
+    AssistantMemorySummary:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryEntry"
+        counts:
+          type: object
+          properties:
+            reminders:
+              type: number
+              minimum: 0
+            debts:
+              type: number
+              minimum: 0
+            notes:
+              type: number
+              minimum: 0
+            photos:
+              type: number
+              minimum: 0
+          required: [reminders, debts, notes, photos]
+      required: [entries, counts]
+    CommandRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 1
+      required: [text]
 

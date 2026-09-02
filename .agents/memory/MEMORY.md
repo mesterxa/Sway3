@@ -1,0 +1,1 @@
+- [OpenAPI/Zod compatibility](openapi-zod-compat.md) — nested integer schemas can generate helpers unsupported by the workspace Zod runtime; verify codegen after contract changes.

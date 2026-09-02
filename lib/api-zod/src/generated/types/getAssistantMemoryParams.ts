@@ -6,6 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
-}
+export type GetAssistantMemoryParams = {
+/**
+ * @minimum 1
+ * @maximum 500
+ */
+limit?: number;
+};
