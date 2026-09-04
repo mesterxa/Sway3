@@ -25,4 +25,4 @@ channel = "stable-25_05"
 [userenv]
 
 [userenv.shared]
-TELEGRAM_ARCHIVE_CHAT_ID = "https://api.telegram.org/bot8913803921:AAElTaTQzcxDqZYX98e5mmYSFUbksSfIzT8/getUpdates افعلها انت"
+TELEGRAM_ARCHIVE_CHAT_ID = "https://web.telegram.org/k/#@Mymesterexa_bot"

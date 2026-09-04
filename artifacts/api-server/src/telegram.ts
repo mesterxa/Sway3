@@ -18,7 +18,10 @@ type TelegramUpdate = {
 type Action =
   | { kind: "reminder"; title: string; date: string }
   | { kind: "debt"; person: string; amount: number; direction: "owedToMe" | "iOwe" }
-  | { kind: "note"; text: string };
+  | { kind: "note"; text: string }
+  | { kind: "memory" }
+  | { kind: "apiHelp" }
+  | { kind: "openApp" };
 
 const connectors = new ReplitConnectors();
 let polling = false;
@@ -33,27 +36,48 @@ const tomorrow = () => {
   return date.toISOString();
 };
 
+const normalizeArabic = (value: string) =>
+  value
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[\u064B-\u065F]/g, "")
+    .trim();
+
 const parseText = (value: string): Action => {
-  const amountMatch = value.match(/(\d[\d\s.]*)/);
+  const normalized = normalizeArabic(value);
+  const amountMatch = normalized.match(/(\d[\d\s.]*)/);
   const amount = amountMatch ? Number(amountMatch[1].replace(/[^\d]/g, "")) : 0;
-  if (/ذكرني|موعد|اتصل|تابع/.test(value)) {
+  if (
+    /ماذا\s+(?:حفظت|سجلت)|ما(?:ذا)?\s+(?:حفظت|سجلت)|اعرض(?:\s+لي)?\s+(?:الذاكرة|ما حفظت)|آخر ما حفظت|ذاكرتي/.test(
+      normalized,
+    )
+  ) {
+    return { kind: "memory" };
+  }
+  if (/\bapi\b|مفتاح api|توكن|رمز الوصول|مفتاح الدخول|اربط(?:\s+لي)?\s+(?:خدمة|api)/i.test(normalized)) {
+    return { kind: "apiHelp" };
+  }
+  if (/افتح.*(?:التطبيق|المساعد|الواجهة)|واجهة التطبيق|mini app/i.test(normalized)) {
+    return { kind: "openApp" };
+  }
+  if (/ذكرني|موعد|اتصل|تابع|لا تنس/.test(normalized)) {
     return {
       kind: "reminder",
-      title: value.replace(/^ذكرني\s*(أن|بأن)?\s*/u, "").trim() || value,
-      date: /غدًا|غدا/.test(value) ? tomorrow() : new Date().toISOString(),
+      title: normalized.replace(/^ذكرني\s*(أن|بأن)?\s*/u, "").trim() || normalized,
+      date: /غدًا|غدا|غد/.test(normalized) ? tomorrow() : new Date().toISOString(),
     };
   }
-  if (/دين|لي عند|عليّ|علي /.test(value) && amount) {
+  if (/دين|لي عند|عليّ|علي /.test(normalized) && amount) {
     const person =
-      value
+      normalized
         .replace(/.*?(على|من|لدى|لي عند)\s*/u, "")
         .replace(amountMatch?.[0] ?? "", "")
+        .replace(/(?:دج|دينار|جنيه|ريال)\s*$/u, "")
         .trim() || "شخص غير مسمى";
     return {
       kind: "debt",
       person,
       amount,
-      direction: /عليّ|علي /.test(value) ? "iOwe" : "owedToMe",
+      direction: /عليّ|علي /.test(normalized) ? "iOwe" : "owedToMe",
     };
   }
   return { kind: "note", text: value };
@@ -94,6 +118,62 @@ async function sendMessage(
         : {}),
     }),
   });
+}
+
+async function sendSavedMedia(
+  chatId: number | string,
+  kind: "photo" | "file",
+  fileId: string,
+  caption: string,
+) {
+  await connectors.proxy("telegram", kind === "photo" ? "/sendPhoto" : "/sendDocument", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      [kind === "photo" ? "photo" : "document"]: fileId,
+      caption: caption.slice(0, 1024),
+    }),
+  });
+}
+
+async function sendMemory(chatId: number | string, replyTo?: number) {
+  const entries = await getMemory(8);
+  if (!entries.length) {
+    await sendMessage(chatId, "ذاكرتك فارغة حاليًا. أرسل لي موعدًا أو دينًا أو ملاحظة وسأحفظه.", replyTo);
+    return;
+  }
+
+  const labels: Record<string, string> = {
+    reminder: "موعد",
+    debt: "دين",
+    note: "ملاحظة",
+    photo: "صورة طلبية",
+    file: "ملف",
+    message: "رسالة",
+  };
+  await sendMessage(
+    chatId,
+    `وجدت ${entries.length} عناصر في ذاكرتك:\n${entries
+      .map((entry, index) => `${index + 1}. [${labels[entry.kind] ?? entry.kind}] ${entry.text}`)
+      .join("\n")}`,
+    replyTo,
+  );
+
+  for (const entry of entries) {
+    if ((entry.kind === "photo" || entry.kind === "file") && entry.data?.fileId) {
+      try {
+        await sendSavedMedia(
+          chatId,
+          entry.kind,
+          entry.data.archiveFileId ?? entry.data.fileId,
+          entry.text,
+        );
+      } catch (error) {
+        logger.warn({ err: error }, "Could not resend saved Telegram media");
+      }
+    }
+  }
 }
 
 async function archiveMedia(
@@ -175,17 +255,27 @@ async function processUpdate(update: TelegramUpdate) {
     return;
   }
   if (text === "/memory") {
-    const entries = await getMemory(8);
-    const response =
-      entries.length === 0
-        ? "ذاكرتك فارغة حاليًا."
-        : `آخر ما حفظته:\n${entries.map((entry, index) => `${index + 1}. ${entry.text}`).join("\n")}`;
-    await sendMessage(message.chat.id, response, message.message_id);
+    await sendMemory(message.chat.id, message.message_id);
     return;
   }
 
   const action = parseText(text);
-  if (action.kind === "reminder") {
+  if (action.kind === "memory") {
+    await sendMemory(message.chat.id, message.message_id);
+  } else if (action.kind === "apiHelp") {
+    await sendMessage(
+      message.chat.id,
+      "فهمت أنك تريد إضافة أو ربط API.\n\nلا ترسل مفتاح API أو التوكن داخل Telegram. اكتب اسم الخدمة فقط، مثل: Google Sheets أو Gemini، وسأجهز لك طريقة الربط الآمنة.",
+      message.message_id,
+    );
+  } else if (action.kind === "openApp") {
+    await sendMessage(
+      message.chat.id,
+      "هذه واجهة مساعد الساعات:",
+      message.message_id,
+      true,
+    );
+  } else if (action.kind === "reminder") {
     await addMemory({
       chatId,
       kind: "reminder",
@@ -203,7 +293,11 @@ async function processUpdate(update: TelegramUpdate) {
     await sendMessage(message.chat.id, "تم تسجيل الدين في ذاكرتك.", message.message_id);
   } else {
     await addMemory({ chatId, kind: "note", text: action.text });
-    await sendMessage(message.chat.id, "حفظت ذلك في ذاكرتك.", message.message_id);
+    await sendMessage(
+      message.chat.id,
+      `حفظت هذه كملاحظة:\n«${action.text}»\n\nإذا كنت تقصد أمرًا مختلفًا، اكتب مثلًا: «ماذا حفظت؟» أو «ذكرني غدًا...»`,
+      message.message_id,
+    );
   }
 }
 
