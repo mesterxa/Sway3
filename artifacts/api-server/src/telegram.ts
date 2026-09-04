@@ -1,6 +1,12 @@
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import { logger } from "./lib/logger";
 import { addMemory, getMemory } from "./lib/assistant-memory";
+import { analyzeProductMedia, askGemini } from "./lib/gemini";
+import {
+  addProduct,
+  listProducts,
+  removeProduct,
+} from "./lib/product-store";
 
 type TelegramUpdate = {
   update_id: number;
@@ -22,6 +28,9 @@ type Action =
   | { kind: "memory" }
   | { kind: "apiHelp" }
   | { kind: "openApp" }
+  | { kind: "productList" }
+  | { kind: "productDelete"; query: string }
+  | { kind: "productAdd"; name: string; price: number; description: string; category: string; stock: number }
   | { kind: "reply"; text: string };
 
 const connectors = new ReplitConnectors();
@@ -107,11 +116,13 @@ async function understandText(value: string): Promise<Action> {
                   "أنت عقل مساعد عربي لبائع ساعات في الجزائر.",
                   "افهم اللهجة العربية البسيطة، واخرج JSON فقط دون Markdown.",
                   "لا تطلب أو تحفظ مفاتيح API أو كلمات المرور أو التوكنات.",
-                  "صنّف الرسالة إلى intent واحد من: reminder, debt, note, memory, apiHelp, openApp, reply.",
+                  "صنّف الرسالة إلى intent واحد من: reminder, debt, note, memory, apiHelp, openApp, productList, productDelete, productAdd, reply.",
                   "للـ reminder أخرج title و date بصيغة ISO تقريبية، وللدين أخرج person و amount و direction.",
                   "direction تكون owedToMe عندما للزبون دين عند البائع، و iOwe عندما البائع مدين للزبون.",
+                  "productAdd يعني إضافة منتج للمخزون، وأخرج name و price و description و category و stock.",
+                  "productList يعني عرض المنتجات، و productDelete يحتاج query باسم المنتج أو معرّفه.",
                   "للأسئلة العامة أخرج reply عربيًا مختصرًا ومفيدًا.",
-                  'الشكل: {"intent":"note","text":"...","title":"","date":"","person":"","amount":0,"direction":"owedToMe","reply":""}',
+                  'الشكل: {"intent":"note","text":"...","title":"","date":"","person":"","amount":0,"direction":"owedToMe","name":"","price":0,"description":"","category":"ساعة","stock":1,"query":"","reply":""}',
                 ].join("\n"),
               },
             ],
@@ -138,12 +149,32 @@ async function understandText(value: string): Promise<Action> {
       person?: string;
       amount?: number;
       direction?: "owedToMe" | "iOwe";
+      name?: string;
+      price?: number;
+      description?: string;
+      category?: string;
+      stock?: number;
+      query?: string;
       reply?: string;
     };
 
     if (parsed.intent === "memory") return { kind: "memory" };
     if (parsed.intent === "apiHelp") return { kind: "apiHelp" };
     if (parsed.intent === "openApp") return { kind: "openApp" };
+    if (parsed.intent === "productList") return { kind: "productList" };
+    if (parsed.intent === "productDelete" && parsed.query) {
+      return { kind: "productDelete", query: parsed.query };
+    }
+    if (parsed.intent === "productAdd" && parsed.name) {
+      return {
+        kind: "productAdd",
+        name: parsed.name,
+        price: typeof parsed.price === "number" ? parsed.price : 0,
+        description: parsed.description ?? "",
+        category: parsed.category ?? "ساعة",
+        stock: typeof parsed.stock === "number" && parsed.stock > 0 ? Math.floor(parsed.stock) : 1,
+      };
+    }
     if (parsed.intent === "reply" && parsed.reply) return { kind: "reply", text: parsed.reply };
     if (parsed.intent === "reminder" && parsed.title) {
       return {
@@ -167,6 +198,55 @@ async function understandText(value: string): Promise<Action> {
     clearTimeout(timeout);
   }
   return localAction;
+}
+
+async function downloadTelegramMedia(fileId: string) {
+  const fileResponse = await connectors.proxy(
+    "telegram",
+    `/getFile?file_id=${encodeURIComponent(fileId)}`,
+    { method: "GET" },
+  );
+  const filePayload = (await fileResponse.json()) as {
+    ok: boolean;
+    result?: { file_path?: string };
+  };
+  const filePath = filePayload.result?.file_path;
+  if (!filePayload.ok || !filePath) return null;
+  const mediaResponse = await connectors.proxy(
+    "telegram",
+    `/file/${filePath}`,
+    { method: "GET" },
+  );
+  if (!mediaResponse.ok) return null;
+  const extension = filePath.split(".").pop()?.toLowerCase();
+  const mimeType =
+    extension === "mp4"
+      ? "video/mp4"
+      : extension === "webm"
+        ? "video/webm"
+        : extension === "png"
+          ? "image/png"
+          : "image/jpeg";
+  return { bytes: Buffer.from(await mediaResponse.arrayBuffer()), mimeType };
+}
+
+async function sendProductList(chatId: number | string, replyTo?: number) {
+  const products = await listProducts();
+  if (!products.length) {
+    await sendMessage(chatId, "المخزون فارغ. أرسل صورة المنتج مع السعر في الوصف، مثل: «أضفها 18500 دج».", replyTo);
+    return;
+  }
+  await sendMessage(
+    chatId,
+    `المخزون (${products.length}):\n${products
+      .slice(0, 50)
+      .map(
+        (product, index) =>
+          `${index + 1}. ${product.name} — ${product.price ? `${product.price.toLocaleString("ar-DZ")} دج` : "السعر غير محدد"} · ${product.stock} قطعة`,
+      )
+      .join("\n")}`,
+    replyTo,
+  );
 }
 
 function getWebAppUrl() {
@@ -325,11 +405,36 @@ async function processUpdate(update: TelegramUpdate) {
         mimeType: message.document?.mime_type,
       },
     });
+    let catalogMessage =
+      "وصلت الوسائط وحفظتها. أرسل السعر في الوصف أو اكتب «أضفها 18500 دج» لأكمل بطاقة المنتج.";
+    const mediaType = message.document?.mime_type ?? (kind === "photo" ? "image/jpeg" : "");
+    if (process.env.GEMINI_API_KEY && /^(image|video)\//.test(mediaType || "image/")) {
+      try {
+        const media = await downloadTelegramMedia(sourceFileId);
+        if (media && media.bytes.byteLength <= 8 * 1024 * 1024) {
+          const analysis = await analyzeProductMedia(media.bytes, media.mimeType, caption);
+          const captionPrice = caption.match(/(\d[\d\s.]*)\s*(?:دج|دينار)?/i)?.[1];
+          const priceFromCaption = captionPrice
+            ? Number(captionPrice.replace(/[^\d]/g, ""))
+            : 0;
+          const product = await addProduct({
+            ...analysis,
+            price: analysis.price || priceFromCaption,
+            imageFileId: archiveFileId ?? sourceFileId,
+            sourceChatId: chatId,
+          });
+          catalogMessage = `أضفت المنتج إلى الموقع:\n${product.name}\nالسعر: ${product.price ? `${product.price.toLocaleString("ar-DZ")} دج` : "غير محدد"}\n${product.description || "تم حفظ الصورة بانتظار وصف أدق."}`;
+        } else if (media) {
+          catalogMessage = "حفظت الوسائط، لكنها أكبر من 8MB للتحليل الآمن. أرسل صورة مضغوطة أو اكتب الاسم والسعر في الوصف.";
+        }
+      } catch (error) {
+        logger.warn({ err: error }, "Could not analyze Telegram product media");
+        catalogMessage = "حفظت الوسائط، لكن تحليل المنتج تعذر الآن. أرسل الاسم والسعر في الوصف وسأضيفه مباشرة.";
+      }
+    }
     await sendMessage(
       message.chat.id,
-      archiveFileId
-        ? "وصلت الطلبية وحفظتها في أرشيف Telegram الخاص.\nأرسل معها اسم الزبون أو المبلغ في الوصف، وسأجهزها للتحليل والتنظيم."
-        : "وصلت الطلبية وحفظتها في ذاكرتك.\nللحفظ في أرشيف Telegram الخاص، أضف معرّف القناة في إعدادات المشروع.",
+      archiveFileId ? `${catalogMessage}\n\nتم أيضًا حفظ نسخة في أرشيف Telegram الخاص.` : catalogMessage,
       message.message_id,
     );
     return;
@@ -350,10 +455,42 @@ async function processUpdate(update: TelegramUpdate) {
     await sendMemory(message.chat.id, message.message_id);
     return;
   }
+  if (text === "/products" || text === "/inventory" || text === "/catalog") {
+    await sendProductList(message.chat.id, message.message_id);
+    return;
+  }
 
   const action = await understandText(text);
   if (action.kind === "memory") {
     await sendMemory(message.chat.id, message.message_id);
+  } else if (action.kind === "productList") {
+    await sendProductList(message.chat.id, message.message_id);
+  } else if (action.kind === "productDelete") {
+    const products = await listProducts();
+    const query = action.query.toLocaleLowerCase();
+    const product = products.find(
+      (item) => item.id === action.query || item.name.toLocaleLowerCase().includes(query),
+    );
+    if (!product) {
+      await sendMessage(message.chat.id, "لم أجد هذا المنتج. اكتب «عرض المنتجات» لأرى لك الأسماء.", message.message_id);
+    } else {
+      await removeProduct(product.id);
+      await sendMessage(message.chat.id, `حذفت «${product.name}» من الموقع والمخزون.`, message.message_id);
+    }
+  } else if (action.kind === "productAdd") {
+    if (!action.price) {
+      await sendMessage(message.chat.id, "أحتاج السعر حتى أضيف المنتج. أرسل الأمر مثل: «أضف ساعة كاسيو، السعر 18500 دج».", message.message_id);
+      return;
+    }
+    const product = await addProduct({
+      name: action.name,
+      price: action.price,
+      description: action.description,
+      category: action.category,
+      stock: action.stock,
+      sourceChatId: chatId,
+    });
+    await sendMessage(message.chat.id, `تمت إضافة «${product.name}» إلى الموقع بسعر ${product.price.toLocaleString("ar-DZ")} دج.`, message.message_id);
   } else if (action.kind === "apiHelp") {
     await sendMessage(
       message.chat.id,

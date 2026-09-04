@@ -60,6 +60,7 @@ function AppContent() {
     deleteDebt,
     addCustomer,
     addWatch,
+    hydrateProducts,
     toggleWatch,
     addNote,
     deleteNote,
@@ -73,6 +74,17 @@ function AppContent() {
   useEffect(() => {
     if (remoteMemory?.entries) hydrateFromServer(remoteMemory.entries);
   }, [hydrateFromServer, remoteMemory]);
+
+  useEffect(() => {
+    const domain = process.env.EXPO_PUBLIC_DOMAIN;
+    if (!domain) return;
+    fetch(`https://${domain}/api/products`)
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error('products request failed'))))
+      .then((payload: { products?: Array<{ id: string; name: string; price: number; status: 'available' | 'sold'; description?: string; category?: string; stock?: number; imageFileId?: string }> }) => {
+        hydrateProducts(payload.products ?? []);
+      })
+      .catch(() => undefined);
+  }, [hydrateProducts]);
 
   const totalOwedToMe = debts
     .filter((item) => item.direction === 'owedToMe' && !item.settled)

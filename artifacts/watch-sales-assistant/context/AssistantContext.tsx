@@ -31,6 +31,10 @@ export type WatchItem = {
   name: string;
   price: number;
   status: 'available' | 'sold';
+  description?: string;
+  category?: string;
+  stock?: number;
+  imageFileId?: string;
 };
 
 export type Note = {
@@ -57,6 +61,7 @@ type AssistantContextValue = Store & {
   deleteDebt: (id: string) => void;
   addCustomer: (item: Omit<Customer, 'id'>) => void;
   addWatch: (item: Omit<WatchItem, 'id' | 'status'>) => void;
+  hydrateProducts: (items: WatchItem[]) => void;
   toggleWatch: (id: string) => void;
   addNote: (text: string) => void;
   deleteNote: (id: string) => void;
@@ -136,6 +141,18 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           ...current,
           watches: [{ ...item, id: makeId(), status: 'available' }, ...current.watches],
         })),
+      hydrateProducts: (items) =>
+        setStore((current) => {
+          const remote = items.map((item) => ({ ...item, status: item.status ?? 'available' as const }));
+          const remoteIds = new Set(remote.map((item) => item.id));
+          return {
+            ...current,
+            watches: [
+              ...remote,
+              ...current.watches.filter((item) => !remoteIds.has(item.id)),
+            ],
+          };
+        }),
       toggleWatch: (id) =>
         setStore((current) => ({
           ...current,
