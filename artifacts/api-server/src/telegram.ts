@@ -21,7 +21,8 @@ type Action =
   | { kind: "note"; text: string }
   | { kind: "memory" }
   | { kind: "apiHelp" }
-  | { kind: "openApp" };
+  | { kind: "openApp" }
+  | { kind: "reply"; text: string };
 
 const connectors = new ReplitConnectors();
 let polling = false;
@@ -83,6 +84,91 @@ const parseText = (value: string): Action => {
   return { kind: "note", text: value };
 };
 
+async function understandText(value: string): Promise<Action> {
+  const localAction = parseText(value);
+  if (localAction.kind !== "note" || !process.env.GEMINI_API_KEY) {
+    return localAction;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [
+              {
+                text: [
+                  "أنت عقل مساعد عربي لبائع ساعات في الجزائر.",
+                  "افهم اللهجة العربية البسيطة، واخرج JSON فقط دون Markdown.",
+                  "لا تطلب أو تحفظ مفاتيح API أو كلمات المرور أو التوكنات.",
+                  "صنّف الرسالة إلى intent واحد من: reminder, debt, note, memory, apiHelp, openApp, reply.",
+                  "للـ reminder أخرج title و date بصيغة ISO تقريبية، وللدين أخرج person و amount و direction.",
+                  "direction تكون owedToMe عندما للزبون دين عند البائع، و iOwe عندما البائع مدين للزبون.",
+                  "للأسئلة العامة أخرج reply عربيًا مختصرًا ومفيدًا.",
+                  'الشكل: {"intent":"note","text":"...","title":"","date":"","person":"","amount":0,"direction":"owedToMe","reply":""}',
+                ].join("\n"),
+              },
+            ],
+          },
+          contents: [{ role: "user", parts: [{ text: value }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            maxOutputTokens: 8192,
+          },
+        }),
+      },
+    );
+    if (!response.ok) return localAction;
+    const payload = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const raw = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!raw) return localAction;
+    const parsed = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, "")) as {
+      intent?: string;
+      text?: string;
+      title?: string;
+      date?: string;
+      person?: string;
+      amount?: number;
+      direction?: "owedToMe" | "iOwe";
+      reply?: string;
+    };
+
+    if (parsed.intent === "memory") return { kind: "memory" };
+    if (parsed.intent === "apiHelp") return { kind: "apiHelp" };
+    if (parsed.intent === "openApp") return { kind: "openApp" };
+    if (parsed.intent === "reply" && parsed.reply) return { kind: "reply", text: parsed.reply };
+    if (parsed.intent === "reminder" && parsed.title) {
+      return {
+        kind: "reminder",
+        title: parsed.title,
+        date: parsed.date || new Date().toISOString(),
+      };
+    }
+    if (parsed.intent === "debt" && parsed.person && typeof parsed.amount === "number" && parsed.amount > 0) {
+      return {
+        kind: "debt",
+        person: parsed.person,
+        amount: parsed.amount,
+        direction: parsed.direction === "iOwe" ? "iOwe" : "owedToMe",
+      };
+    }
+    if (parsed.intent === "note") return { kind: "note", text: parsed.text || value };
+  } catch (error) {
+    logger.warn({ err: error }, "Gemini text understanding failed");
+  } finally {
+    clearTimeout(timeout);
+  }
+  return localAction;
+}
+
 function getWebAppUrl() {
   const configuredUrl = process.env.TELEGRAM_WEB_APP_URL;
   if (configuredUrl) return configuredUrl;
@@ -138,7 +224,13 @@ async function sendSavedMedia(
 }
 
 async function sendMemory(chatId: number | string, replyTo?: number) {
-  const entries = await getMemory(8);
+  const entries = (await getMemory(50))
+    .filter((entry) => {
+      if (entry.kind !== "note") return true;
+      const detected = parseText(entry.text);
+      return detected.kind !== "memory" && detected.kind !== "apiHelp" && detected.kind !== "openApp";
+    })
+    .slice(0, 8);
   if (!entries.length) {
     await sendMessage(chatId, "ذاكرتك فارغة حاليًا. أرسل لي موعدًا أو دينًا أو ملاحظة وسأحفظه.", replyTo);
     return;
@@ -259,7 +351,7 @@ async function processUpdate(update: TelegramUpdate) {
     return;
   }
 
-  const action = parseText(text);
+  const action = await understandText(text);
   if (action.kind === "memory") {
     await sendMemory(message.chat.id, message.message_id);
   } else if (action.kind === "apiHelp") {
@@ -275,6 +367,8 @@ async function processUpdate(update: TelegramUpdate) {
       message.message_id,
       true,
     );
+  } else if (action.kind === "reply") {
+    await sendMessage(message.chat.id, action.text, message.message_id);
   } else if (action.kind === "reminder") {
     await addMemory({
       chatId,
@@ -338,6 +432,17 @@ export async function startTelegramWorker() {
     };
     if (!payload.ok) throw new Error(payload.description || "Telegram connection failed");
     botUsername = payload.result?.username ?? "";
+    await connectors.proxy("telegram", "/setMyCommands", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commands: [
+          { command: "start", description: "فتح مساعد الساعات" },
+          { command: "memory", description: "عرض ما حفظته" },
+          { command: "help", description: "عرض طريقة الاستخدام" },
+        ],
+      }),
+    });
     polling = true;
     logger.info({ botUsername }, "Telegram assistant connected");
     void poll();
