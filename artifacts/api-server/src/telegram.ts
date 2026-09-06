@@ -7,6 +7,14 @@ import {
   listProducts,
   removeProduct,
 } from "./lib/product-store";
+import {
+  addCashMovement,
+  addExpense,
+  addOrder,
+  getEconomyReport,
+  getRecentEconomy,
+  upsertCustomer,
+} from "./lib/economy-store";
 
 type TelegramUpdate = {
   update_id: number;
@@ -31,6 +39,12 @@ type Action =
   | { kind: "productList" }
   | { kind: "productDelete"; query: string }
   | { kind: "productAdd"; name: string; price: number; description: string; category: string; stock: number }
+  | { kind: "report"; scope: "today" | "month" | "all" }
+  | { kind: "recentEconomy" }
+  | { kind: "sale"; customer: string; product: string; amount: number; cost: number; note: string }
+  | { kind: "expense"; title: string; amount: number; category: string; note: string }
+  | { kind: "cash"; cashKind: "in" | "out"; title: string; amount: number; note: string }
+  | { kind: "customer"; name: string; phone: string; note: string }
   | { kind: "reply"; text: string };
 
 const connectors = new ReplitConnectors();
@@ -56,6 +70,48 @@ const parseText = (value: string): Action => {
   const normalized = normalizeArabic(value);
   const amountMatch = normalized.match(/(\d[\d\s.]*)/);
   const amount = amountMatch ? Number(amountMatch[1].replace(/[^\d]/g, "")) : 0;
+  if (/^(?:\/)?(?:تقرير|report|حسابات|الأرباح|الارباح|المداخيل)/i.test(normalized)) {
+    return {
+      kind: "report",
+      scope: /شهر|month/i.test(normalized) ? "month" : /كل|all|كامل/i.test(normalized) ? "all" : "today",
+    };
+  }
+  if (/^(?:\/)?(?:آخر العمليات|آخر الحسابات|recent|حركاتي)/i.test(normalized)) {
+    return { kind: "recentEconomy" };
+  }
+  if (/(?:مصروف|مصاريف|تكلفة تشغيل|دفعت للمحل)/.test(normalized) && amount) {
+    return {
+      kind: "expense",
+      title: normalized.replace(/(?:مصروف|مصاريف|تكلفة تشغيل|دفعت للمحل)/, "").replace(amountMatch?.[0] ?? "", "").trim() || "مصروف عام",
+      amount,
+      category: "تشغيل",
+      note: value,
+    };
+  }
+  if (/(?:قبضت|دخل|استلمت)/.test(normalized) && amount) {
+    return { kind: "cash", cashKind: "in", title: "مبلغ مقبوض", amount, note: value };
+  }
+  if (/(?:دفعت|خرج من الصندوق|سحبت)/.test(normalized) && amount && !/دين|مصروف/.test(normalized)) {
+    return { kind: "cash", cashKind: "out", title: "مبلغ مدفوع", amount, note: value };
+  }
+  if (/(?:بعت|بيع|سجل طلب|طلبية)/.test(normalized) && amount) {
+    const customer = normalized.match(/(?:للزبون|للعميل|الزبون|العميل)\s+([^،,]+)/)?.[1]?.trim() ?? "زبون غير مسمى";
+    const product = normalized
+      .replace(/(?:بعت|بيع|سجل(?:ت)?\s+طلب|طلبية)/, "")
+      .replace(/(?:للزبون|للعميل|الزبون|العميل)\s+[^،,]+/u, "")
+      .replace(amountMatch?.[0] ?? "", "")
+      .replace(/(?:بـ|بسعر|السعر|دج|دينار)/g, "")
+      .trim() || "منتج غير مسمى";
+    return { kind: "sale", customer, product, amount, cost: 0, note: value };
+  }
+  if (/^(?:أضف|سجل|احفظ)\s*(?:زبون|عميل)/.test(normalized)) {
+    return {
+      kind: "customer",
+      name: normalized.replace(/^(?:أضف|سجل|احفظ)\s*(?:زبون|عميل)\s*/u, "").trim() || "زبون جديد",
+      phone: "",
+      note: value,
+    };
+  }
   if (
     /ماذا\s+(?:حفظت|سجلت)|ما(?:ذا)?\s+(?:حفظت|سجلت)|اعرض(?:\s+لي)?\s+(?:الذاكرة|ما حفظت)|آخر ما حفظت|ذاكرتي/.test(
       normalized,
@@ -116,13 +172,18 @@ async function understandText(value: string): Promise<Action> {
                   "أنت عقل مساعد عربي لبائع ساعات في الجزائر.",
                   "افهم اللهجة العربية البسيطة، واخرج JSON فقط دون Markdown.",
                   "لا تطلب أو تحفظ مفاتيح API أو كلمات المرور أو التوكنات.",
-                  "صنّف الرسالة إلى intent واحد من: reminder, debt, note, memory, apiHelp, openApp, productList, productDelete, productAdd, reply.",
+                  "صنّف الرسالة إلى intent واحد من: reminder, debt, note, memory, apiHelp, openApp, productList, productDelete, productAdd, report, recentEconomy, sale, expense, cash, customer, reply.",
                   "للـ reminder أخرج title و date بصيغة ISO تقريبية، وللدين أخرج person و amount و direction.",
                   "direction تكون owedToMe عندما للزبون دين عند البائع، و iOwe عندما البائع مدين للزبون.",
                   "productAdd يعني إضافة منتج للمخزون، وأخرج name و price و description و category و stock.",
                   "productList يعني عرض المنتجات، و productDelete يحتاج query باسم المنتج أو معرّفه.",
+                  "sale لتسجيل بيع أو طلب: أخرج customer و product و amount و cost و note.",
+                  "expense لمصاريف المحل: أخرج title و amount و category و note.",
+                  "cash لحركة الصندوق: أخرج cashKind=in عند القبض و cashKind=out عند الدفع، مع title و amount و note.",
+                  "report لطلب تقرير مالي، وأخرج scope=today أو month أو all. recentEconomy لآخر العمليات.",
+                  "customer لإضافة زبون، وأخرج name و phone و note.",
                   "للأسئلة العامة أخرج reply عربيًا مختصرًا ومفيدًا.",
-                  'الشكل: {"intent":"note","text":"...","title":"","date":"","person":"","amount":0,"direction":"owedToMe","name":"","price":0,"description":"","category":"ساعة","stock":1,"query":"","reply":""}',
+                  'الشكل: {"intent":"note","text":"...","title":"","date":"","person":"","amount":0,"direction":"owedToMe","name":"","price":0,"description":"","category":"ساعة","stock":1,"query":"","customer":"","product":"","cost":0,"cashKind":"in","scope":"today","phone":"","reply":""}',
                 ].join("\n"),
               },
             ],
@@ -155,6 +216,12 @@ async function understandText(value: string): Promise<Action> {
       category?: string;
       stock?: number;
       query?: string;
+      customer?: string;
+      product?: string;
+      cost?: number;
+      cashKind?: "in" | "out";
+      scope?: "today" | "month" | "all";
+      phone?: string;
       reply?: string;
     };
 
@@ -173,6 +240,46 @@ async function understandText(value: string): Promise<Action> {
         description: parsed.description ?? "",
         category: parsed.category ?? "ساعة",
         stock: typeof parsed.stock === "number" && parsed.stock > 0 ? Math.floor(parsed.stock) : 1,
+      };
+    }
+    if (parsed.intent === "report") {
+      return { kind: "report", scope: parsed.scope ?? "today" };
+    }
+    if (parsed.intent === "recentEconomy") return { kind: "recentEconomy" };
+    if (parsed.intent === "sale" && parsed.customer && parsed.product && parsed.amount) {
+      return {
+        kind: "sale",
+        customer: parsed.customer,
+        product: parsed.product,
+        amount: parsed.amount,
+        cost: parsed.cost ?? 0,
+        note: parsed.text ?? value,
+      };
+    }
+    if (parsed.intent === "expense" && parsed.title && parsed.amount) {
+      return {
+        kind: "expense",
+        title: parsed.title,
+        amount: parsed.amount,
+        category: parsed.category ?? "تشغيل",
+        note: parsed.text ?? value,
+      };
+    }
+    if (parsed.intent === "cash" && parsed.amount) {
+      return {
+        kind: "cash",
+        cashKind: parsed.cashKind === "out" ? "out" : "in",
+        title: parsed.title ?? (parsed.cashKind === "out" ? "مبلغ مدفوع" : "مبلغ مقبوض"),
+        amount: parsed.amount,
+        note: parsed.text ?? value,
+      };
+    }
+    if (parsed.intent === "customer" && parsed.name) {
+      return {
+        kind: "customer",
+        name: parsed.name,
+        phone: parsed.phone ?? "",
+        note: parsed.text ?? value,
       };
     }
     if (parsed.intent === "reply" && parsed.reply) return { kind: "reply", text: parsed.reply };
@@ -245,6 +352,47 @@ async function sendProductList(chatId: number | string, replyTo?: number) {
           `${index + 1}. ${product.name} — ${product.price ? `${product.price.toLocaleString("ar-DZ")} دج` : "السعر غير محدد"} · ${product.stock} قطعة`,
       )
       .join("\n")}`,
+    replyTo,
+  );
+}
+
+async function sendEconomyReport(
+  chatId: number | string,
+  scope: "today" | "month" | "all",
+  replyTo?: number,
+) {
+  const report = await getEconomyReport(scope);
+  const label = scope === "today" ? "اليوم" : scope === "month" ? "هذا الشهر" : "كل الفترة";
+  await sendMessage(
+    chatId,
+    [
+      `التقرير المالي — ${label}`,
+      "",
+      `المبيعات: ${report.sales.toLocaleString("ar-DZ")} دج (${report.orders.length} طلب)`,
+      `تكلفة البضاعة: ${report.cost.toLocaleString("ar-DZ")} دج`,
+      `الربح الإجمالي: ${report.grossProfit.toLocaleString("ar-DZ")} دج`,
+      `المصاريف: ${report.expenseTotal.toLocaleString("ar-DZ")} دج`,
+      `صافي الربح: ${report.netProfit.toLocaleString("ar-DZ")} دج`,
+      "",
+      `دخل الصندوق: ${report.cashIn.toLocaleString("ar-DZ")} دج`,
+      `خرج الصندوق: ${report.cashOut.toLocaleString("ar-DZ")} دج`,
+      `الرصيد النقدي: ${report.cashBalance.toLocaleString("ar-DZ")} دج`,
+    ].join("\n"),
+    replyTo,
+  );
+}
+
+async function sendRecentEconomy(chatId: number | string, replyTo?: number) {
+  const recent = await getRecentEconomy(8);
+  const lines = [
+    "آخر العمليات الاقتصادية:",
+    ...recent.orders.map((item) => `بيع · ${item.product} · ${item.amount.toLocaleString("ar-DZ")} دج`),
+    ...recent.expenses.map((item) => `مصروف · ${item.title} · ${item.amount.toLocaleString("ar-DZ")} دج`),
+    ...recent.cash.map((item) => `${item.kind === "in" ? "قبض" : "دفع"} · ${item.title} · ${item.amount.toLocaleString("ar-DZ")} دج`),
+  ];
+  await sendMessage(
+    chatId,
+    lines.length > 1 ? lines.slice(0, 20).join("\n") : "لا توجد عمليات اقتصادية محفوظة بعد.",
     replyTo,
   );
 }
@@ -445,9 +593,8 @@ async function processUpdate(update: TelegramUpdate) {
   if (text === "/start" || text === "/help") {
     await sendMessage(
       message.chat.id,
-      "أهلًا بك في مساعد الساعات.\n\nأرسل أي شيء وسأحفظه لك، مثل:\n• ذكرني غدًا بالاتصال بمحمد\n• سجل دين على محمد 5000\n• الزبون يحب الساعات السوداء\n\nوأرسل صور الطلبيات مع وصف مختصر. استخدم /memory لعرض آخر ما حفظته.",
+      "أهلًا بك في مركز أعمالك.\n\nكل الإدارة من هنا:\n• /report — تقرير اليوم\n• /report month — تقرير الشهر\n• /products — المخزون\n• /recent — آخر العمليات\n• «بعت ساعة كاسيو للزبون محمد بـ 18500 دج»\n• «مصروف نقل 1200 دج»\n• «قبضت 5000 دج»\n• «أضف زبون محمد 0555...»\n\nوأرسل صورة المنتج مع السعر لإضافته إلى الكتالوج.",
       message.message_id,
-      true,
     );
     return;
   }
@@ -459,10 +606,90 @@ async function processUpdate(update: TelegramUpdate) {
     await sendProductList(message.chat.id, message.message_id);
     return;
   }
+  if (text === "/report" || text === "/today") {
+    await sendEconomyReport(message.chat.id, "today", message.message_id);
+    return;
+  }
+  if (text === "/recent") {
+    await sendRecentEconomy(message.chat.id, message.message_id);
+    return;
+  }
+  if (text.startsWith("/report ")) {
+    await sendEconomyReport(
+      message.chat.id,
+      /month|شهر/i.test(text) ? "month" : /all|كل|كامل/i.test(text) ? "all" : "today",
+      message.message_id,
+    );
+    return;
+  }
 
   const action = await understandText(text);
   if (action.kind === "memory") {
     await sendMemory(message.chat.id, message.message_id);
+  } else if (action.kind === "report") {
+    await sendEconomyReport(message.chat.id, action.scope, message.message_id);
+  } else if (action.kind === "recentEconomy") {
+    await sendRecentEconomy(message.chat.id, message.message_id);
+  } else if (action.kind === "sale") {
+    const order = await addOrder({
+      customer: action.customer,
+      product: action.product,
+      amount: action.amount,
+      cost: action.cost,
+      status: "paid",
+      note: action.note,
+      chatId,
+    });
+    await upsertCustomer({ name: action.customer, chatId, note: action.note });
+    await addCashMovement({
+      kind: "in",
+      title: `بيع ${action.product}`,
+      amount: action.amount,
+      note: order.id,
+      chatId,
+    });
+    await sendMessage(
+      message.chat.id,
+      `تم تسجيل البيع.\n${action.product} للزبون ${action.customer}\nالمبلغ: ${action.amount.toLocaleString("ar-DZ")} دج\nاكتب «تقرير اليوم» لرؤية الربح والصندوق.`,
+      message.message_id,
+    );
+  } else if (action.kind === "expense") {
+    await addExpense({
+      title: action.title,
+      amount: action.amount,
+      category: action.category,
+      note: action.note,
+      chatId,
+    });
+    await addCashMovement({
+      kind: "out",
+      title: action.title,
+      amount: action.amount,
+      note: action.note,
+      chatId,
+    });
+    await sendMessage(message.chat.id, `تم تسجيل مصروف ${action.title}: ${action.amount.toLocaleString("ar-DZ")} دج.`, message.message_id);
+  } else if (action.kind === "cash") {
+    await addCashMovement({
+      kind: action.cashKind,
+      title: action.title,
+      amount: action.amount,
+      note: action.note,
+      chatId,
+    });
+    await sendMessage(
+      message.chat.id,
+      `تم تسجيل ${action.cashKind === "in" ? "قبض" : "دفع"} ${action.amount.toLocaleString("ar-DZ")} دج.`,
+      message.message_id,
+    );
+  } else if (action.kind === "customer") {
+    const customer = await upsertCustomer({
+      name: action.name,
+      phone: action.phone || undefined,
+      note: action.note,
+      chatId,
+    });
+    await sendMessage(message.chat.id, `تم حفظ الزبون «${customer.name}».`, message.message_id);
   } else if (action.kind === "productList") {
     await sendProductList(message.chat.id, message.message_id);
   } else if (action.kind === "productDelete") {
@@ -576,6 +803,9 @@ export async function startTelegramWorker() {
         commands: [
           { command: "start", description: "فتح مساعد الساعات" },
           { command: "memory", description: "عرض ما حفظته" },
+          { command: "report", description: "التقرير المالي" },
+          { command: "products", description: "عرض المخزون" },
+          { command: "recent", description: "آخر العمليات" },
           { command: "help", description: "عرض طريقة الاستخدام" },
         ],
       }),
